@@ -1,0 +1,71 @@
+# --- ОС и IDE ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
+
+# --- Python / FastAPI ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.env
+.env.*
+!.env.sample
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.cache/
+.pyre/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Alembic: версионируем миграции, не игнорим versions/*
+# (но можно игнорить локальные артефакты)
+api/alembic/*.log
+
+# --- Node / Vite (web) ---
+web/node_modules/
+web/.pnpm-store/
+web/.turbo/
+web/.eslintcache
+web/dist/
+web/build/
+web/.vite/
+web/.cache/
+web/.env
+web/.env.*
+!web/.env.sample
+
+# --- Логи и артефакты ---
+logs/
+*.log
+*.pid
+
+# --- Docker / Compose ---
+docker-compose.override.yml
+# локальные примапленные директории (если решите монтировать в FS)
+pgdata/
+redis-data/
+uploads/
+
+# --- Почта / тестовые вложения ---
+mailhog/
+tmp/
+temp/
+
+# --- Генерируемые файлы ---
+*.tmp
+*.bak
+*.orig
+

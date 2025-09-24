@@ -1,0 +1,23 @@
+[project]
+name = "tutor-mvp"
+version = "0.1.0"
+dependencies = [
+  "fastapi==0.115.0",
+  "uvicorn[standard]==0.30.6",
+  "sqlalchemy==2.0.34",
+  "psycopg2-binary==2.9.9",
+  "alembic==1.13.2",
+  "passlib[argon2]==1.7.4",
+  "pyjwt==2.9.0",
+  "redis==5.0.8",
+  "rq==1.16.2",
+  "requests==2.32.3"
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 88
+select = ["E","F","I"]
