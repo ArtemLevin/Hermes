@@ -1,8 +1,19 @@
+"""Endpoints for working with students."""
+
+import sys
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from deps import get_db, pagination, Page
-from models import Student
+
+if not (__package__ or "").startswith("api."):
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
+    from deps import Page, get_db, pagination
+    from models import Student
+else:  # pragma: no cover - ветка для запуска как пакет
+    from ..deps import Page, get_db, pagination
+    from ..models import Student
 
 router = APIRouter()
 
@@ -13,14 +24,23 @@ def list_students(
     page: Page = Depends(pagination),
     db: Session = Depends(get_db),
 ):
-    stmt = select(Student)
+    filters = []
     if q:
-        stmt = stmt.where(Student.name.ilike(f"%{q}%"))
-    all_students = db.execute(stmt).scalars().all()
-    response.headers["X-Total-Count"] = str(len(all_students))
+        filters.append(Student.name.ilike(f"%{q.strip()}%"))
+
+    total_stmt = select(func.count()).select_from(Student)
+    if filters:
+        total_stmt = total_stmt.where(*filters)
+    total = db.scalar(total_stmt) or 0
+    response.headers["X-Total-Count"] = str(total)
+
     start = (page.page - 1) * page.size
-    items = [
-        {"id": s.id, "name": s.name, "level": s.level}
-        for s in all_students[start : start + page.size]
-    ]
-    return items
+    items_stmt = (
+        select(Student)
+        .where(*filters)
+        .order_by(Student.id)
+        .offset(start)
+        .limit(page.size)
+    )
+    students = db.execute(items_stmt).scalars().all()
+    return [{"id": s.id, "name": s.name, "level": s.level} for s in students]

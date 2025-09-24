@@ -59,6 +59,9 @@ pgdata/
 redis-data/
 uploads/
 
+# --- Локальное хранилище SQLite по умолчанию ---
+api/storage/
+
 # --- Почта / тестовые вложения ---
 mailhog/
 tmp/

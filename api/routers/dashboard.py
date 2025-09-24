@@ -1,8 +1,17 @@
+from pathlib import Path
+import sys
+
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from deps import get_db
-from models import Student, Lesson
+
+if not (__package__ or "").startswith("api."):
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
+    from deps import get_db
+    from models import Lesson, Student
+else:  # pragma: no cover - ветка для запуска как пакет
+    from ..deps import get_db
+    from ..models import Lesson, Student
 
 router = APIRouter()
 
