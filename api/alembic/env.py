@@ -1,6 +1,9 @@
+import os
+import sys
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
+from logging.config import fileConfig
 from models import Base  # наши модели
 
 # конфиг Alembic из alembic.ini
@@ -9,6 +12,11 @@ config = context.config
 # логирование
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 
 # метаданные для автогенерации миграций
 target_metadata = Base.metadata
