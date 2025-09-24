@@ -52,8 +52,8 @@
 
 ### 1. Клонирование и подготовка
 ```bash
-git clone https://github.com/your-org/tutor-mvp.git
-cd tutor-mvp
+git clone https://github.com/ArtemLevin/Hermes.git
+cd Hermes
 cp .env.sample .env
 ```
 
