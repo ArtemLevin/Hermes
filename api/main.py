@@ -1,6 +1,16 @@
+"""Application bootstrap for the FastAPI backend."""
+
+from pathlib import Path
+import sys
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import auth, students, dashboard
+
+if __package__ in {None, ""}:
+    sys.path.append(str(Path(__file__).resolve().parent))
+    from routers import auth, dashboard, students  # type: ignore
+else:
+    from .routers import auth, dashboard, students
 
 app = FastAPI(title="Tutor MVP", version="0.1")
 
