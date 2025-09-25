@@ -1,18 +1,23 @@
-"""Application bootstrap for the FastAPI backend."""
-
-from pathlib import Path
-import sys
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from routers import auth, students, dashboard, notifications
 
-if __package__ in {None, ""}:
-    sys.path.append(str(Path(__file__).resolve().parent))
-    from routers import auth, dashboard, students  # type: ignore
-else:
-    from .routers import auth, dashboard, students
+from rate_limit import RateLimitMiddleware
 
-app = FastAPI(title="Tutor MVP", version="0.1")
+
+# Логи и correlation-id
+from logging_config import setup_json_logging, CorrelationIdMiddleware
+
+# Метрики
+from metrics import MetricsMiddleware, router as metrics_router
+
+# Ваши роутеры
+from routers import auth, students, dashboard
+
+# ==== Инициализация приложения ====
+setup_json_logging()
+
+app = FastAPI(title="Tutor MVP", version="0.2")  # версия ↑ для этапа 1
 
 # CORS для фронтенда
 app.add_middleware(
@@ -23,11 +28,22 @@ app.add_middleware(
     allow_credentials=True,
 )
 
+app.add_middleware(RateLimitMiddleware)  # разместите после CORS, до метрик — по желанию
+
+# Middlewares: correlation-id и метрики
+app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(MetricsMiddleware)
+
+# Технические эндпоинты
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-# Подключаем роутеры
+# Маршруты приложения
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(students.router, prefix="/students", tags=["students"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
+
+# /metrics для Prometheus
+app.include_router(metrics_router, tags=["metrics"])
+app.include_router(notifications.router, prefix="/notifications", tags=["notifications"])

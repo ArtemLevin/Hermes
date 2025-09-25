@@ -1,3 +1,4 @@
+version: "3.9"
 services:
   db:
     image: postgres:15
@@ -23,9 +24,7 @@ services:
       retries: 10
 
   api:
-    build:
-      context: .                 # <— КОРЕНЬ РЕПО
-      dockerfile: api/Dockerfile
+    build: ./api
     environment:
       DATABASE_URL: postgresql+psycopg2://app:app@db:5432/tutor
       REDIS_URL: redis://redis:6379/0
@@ -33,9 +32,12 @@ services:
       SMTP_PORT: 1025
       SECRET_KEY: devsecret
     depends_on:
-      db: { condition: service_healthy }
-      redis: { condition: service_started }
-      mailhog: { condition: service_started }
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      mailhog:
+        condition: service_started
     ports: ["8000:8000"]
     healthcheck:
       test: ["CMD","curl","-f","http://localhost:8000/health"]
@@ -44,21 +46,30 @@ services:
       retries: 10
 
   worker:
-    build:
-      context: .
-      dockerfile: api/Dockerfile
-    command: ["rq","worker","default"]    # <-- было ["python","-m","rq","worker","default"]
+    build: ./api
+    command: ["python","-m","rq","worker","default"]
     environment:
-      PYTHONPATH: /app/api               # полезно оставить
       REDIS_URL: redis://redis:6379/0
     depends_on:
-      redis: { condition: service_started }
+      redis:
+        condition: service_started
+
+  # Новый сервис для планировщика периодических задач
+  scheduler:
+    build: ./api
+    command: ["python","jobs.py"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_started
 
   web:
     build: ./web
     ports: ["5173:5173"]
     depends_on:
-      api: { condition: service_healthy }
+      api:
+        condition: service_healthy
 
   mailhog:
     image: mailhog/mailhog
