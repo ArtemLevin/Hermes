@@ -1,210 +1,133 @@
-# Hermes MVP
+# Hermes API
 
-> Мини-сервис-органайзер для частного репетитора: учёт учеников, уроков, ДЗ-квестов, аналитики и оплат.
+Production-ready FastAPI service that powers the Hermes tutoring platform. The service exposes
+secure CRUD APIs for tutors and students, includes observability tooling, and ships with database
+migrations, Docker images, and automated tests.
 
----
+## Features
 
-## ✨ Возможности
+- **FastAPI** with async SQLAlchemy 2.0 and PostgreSQL/SQLite support
+- JWT-based authentication with Argon2 password hashing
+- Idempotent POST endpoints backed by persistent tokens
+- Structured JSON logging (request/response correlation id)
+- Prometheus `/metrics` endpoint and OpenTelemetry hooks for distributed tracing
+- Graceful shutdown, request timeouts, rate limiting, gzip compression, and CORS controls
+- Alembic migrations and reusable Makefile workflow
+- Comprehensive pytest suite covering API flows
 
-- **Ученики**: профили, биография, аватар-герой, трофеи.  
-- **Уроки**: календарь-мозаика с карточками.  
-- **Домашка**: задания как квесты (награды: монетки, бейджи).  
-- **Аналитика**: теплокарта ошибок, «радар внимания», прогноз экзамена.  
-- **Финансы**: инвойсы, оплаты, напоминания.  
-- **Геймификация**: мемы, турниры, достижения.  
-- **Уведомления**: email через MailHog.  
+## Project layout
 
----
-
-## 🛠️ Стек
-
-- **Backend**: Python 3.11, FastAPI, SQLAlchemy, Alembic, RQ (Redis).  
-- **Frontend**: React 18, Vite, TailwindCSS, React Router.  
-- **DB**: PostgreSQL 15.  
-- **Cache/Jobs**: Redis 7.  
-- **Infra**: Docker, docker-compose.  
-- **Mail**: MailHog (SMTP sandbox).  
-- **Мониторинг**: JSON-логи, Prometheus-метрики, rate-limit.  
-
----
-
-## 🚀 Запуск проекта
-
-### 1. Подготовка
-
-- Установите Docker и docker-compose.  
-- Склонируйте репозиторий.  
-- Скопируйте `.env.sample` → `.env` (по умолчанию достаточно стандартных значений).
-
-### 2. Поднять окружение
-
-```bash
-make up
+```
+app/
+  api/            # Routers, dependencies, middleware
+  core/           # Configuration, logging, security, tracing
+  db/             # SQLAlchemy base + session factory
+  instrumentation/# Metrics & rate limiting helpers
+  models/         # ORM models
+  schemas/        # Pydantic response/request models
+  services/       # Business logic services
+  main.py         # FastAPI application instance
+alembic/          # Database migrations
+Dockerfile        # Production-ready container image
+Makefile          # Common developer commands
+docker-compose.yml# Local orchestrator (API + Postgres)
 ```
 
-### 3. Применить миграции
+## Requirements
+
+- Python 3.11+
+- PostgreSQL 13+ (or SQLite for local dev/test)
+- Optional: Docker 24+ and Docker Compose v2
+
+## Environment configuration
+
+All runtime settings are provided via environment variables (prefixed with `HERMES_`). An example is
+available in `.env.example`.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `HERMES_DATABASE_URL` | SQLAlchemy database URL | `sqlite+aiosqlite:///./hermes.db` |
+| `HERMES_JWT_SECRET_KEY` | Secret used to sign JWT tokens | `change-me` (override in prod) |
+| `HERMES_RATE_LIMIT_PER_MINUTE` | Requests per minute per client | `120` |
+| `HERMES_REQUEST_TIMEOUT_SECONDS` | Request timeout | `10` |
+| `HERMES_CORS_ORIGINS` | JSON array of allowed origins | `[]` (allows all) |
+| `HERMES_OTLP_ENDPOINT` | OTLP collector endpoint for tracing | unset |
+
+## Local development (venv)
 
 ```bash
+# Create a virtual environment and install dependencies
+make install
+
+# Run linting, type-checks, and tests
+make lint
+make typecheck
+make test
+
+# Apply migrations (optional when using SQLite)
+make migrate
+
+# Start the API with hot reload
+make run
+```
+
+Visit http://localhost:8000/docs for the interactive OpenAPI UI.
+
+## Docker usage
+
+```bash
+# Build and run the stack (API + PostgreSQL)
+make compose-up
+
+# Tear everything down
+make compose-down
+```
+
+The API will be available at http://localhost:8000 once the Postgres health check passes.
+
+## Database migrations
+
+```bash
+# Generate a new revision (after modifying models)
+make revision msg="describe change"
+
+# Apply the latest migrations
 make migrate
 ```
 
-### 4. Засеять данные
-
-```bash
-make seed        # базовые фикстуры (пользователь-репетитор, 3 ученика)
-make seed2       # доп. сиды (темы, аватары, мемы, турнир)
-make seed_lessons # тестовые уроки для календаря
-```
-
-### 5. Проверка
-
-- API: http://localhost:8000  
-- Swagger: http://localhost:8000/docs  
-- Метрики: http://localhost:8000/metrics  
-- Web (React): http://localhost:5173  
-- Почта (MailHog UI): http://localhost:8025  
-
----
-
-## 📂 Структура проекта
-
-```text
-api/
-  ├── main.py             # Точка входа FastAPI
-  ├── models.py           # SQLAlchemy ORM
-  ├── routers/            # Маршруты API (auth, students, lessons, ...)
-  ├── scripts/            # seed.py, seed_stage2.py, seed_lessons.py
-  ├── alembic/            # миграции
-  ├── metrics.py          # Prometheus middleware
-  └── logging_config.py   # JSON-логи + correlation-id
-
-web/
-  ├── src/
-  │   ├── App.tsx         # Маршрутизация фронта
-  │   ├── pages/          # Страницы (Dashboard, Finance, Heatmap, ...)
-  │   └── components/     # Общие компоненты
-  ├── index.html
-  └── package.json
-```
-
----
-
-## 📊 UML-Диаграммы
-
-### Архитектура модулей
-
-```mermaid
-graph TD
-    subgraph Frontend [React]
-      UI[UI pages]
-    end
-    subgraph Backend [FastAPI]
-      Auth[Auth Router]
-      Students[Students Router]
-      Lessons[Lessons Router]
-      Assignments[Assignments Router]
-      Analytics[Analytics Router]
-      Finance[Payments Router]
-      Notifications[Notifications Router]
-    end
-    DB[(Postgres)]
-    Cache[(Redis)]
-    Worker[RQ Worker]
-
-    UI --> Backend
-    Backend --> DB
-    Backend --> Cache
-    Worker --> Cache
-    Worker --> DB
-```
-
-### ER-Диаграмма (основные таблицы)
-
-```mermaid
-erDiagram
-    USER ||--o{ STUDENT_PROFILE : tutor
-    STUDENT_PROFILE ||--o{ LESSON : has
-    STUDENT_PROFILE ||--o{ ASSIGNMENT : gets
-    ASSIGNMENT ||--o{ SUBMISSION : has
-    STUDENT_PROFILE ||--o{ TROPHY : earns
-    STUDENT_PROFILE ||--o{ PAYMENT : pays
-    STUDENT_PROFILE ||--o{ INVOICE : issued
-    TOPIC ||--o{ ERROR_HOTSPOT : maps
-    ASSIGNMENT ||--o{ TOPIC : tags
-```
-
----
-
-## 🔌 Примеры API
-
-### Создать ученика
-
-```bash
-curl -X POST http://localhost:8000/students   -H "Content-Type: application/json"   -d '{"name": "Иван Петров"}'
-```
-
-### Создать урок
-
-```bash
-curl -X POST http://localhost:8000/lessons   -H "Content-Type: application/json"   -d '{"student_id": 1, "date": "2025-09-30T12:00:00", "topic": "Интегралы"}'
-```
-
-### Выдать ДЗ
-
-```bash
-curl -X POST http://localhost:8000/assignments   -H "Content-Type: application/json"   -d '{"student_id": 1, "title": "Задачи на производные", "reward_type": "star"}'
-```
-
----
-
-## 🧪 Тесты
+## Testing
 
 ```bash
 make test
 ```
 
-- `test_smoke.py` — базовые проверки Stage 0–1.  
-- `test_stage2.py` — биография, аватары, финансы, аналитика.  
+Tests run against an in-memory SQLite database and exercise authentication, idempotency, and
+observability endpoints.
 
----
+## Observability
 
-## 🔐 Безопасность и приватность
+- **Logs**: JSON-formatted with `request_id`, method, and path context.
+- **Metrics**: Prometheus-compatible metrics exposed at `/metrics`.
+- **Tracing**: Enable by setting `HERMES_OTLP_ENDPOINT` to an OTLP collector URL.
+- **Health checks**: `/health`, `/health/live`, `/health/ready`.
 
-- RBAC: `tutor | student | parent` (базовые права).  
-- JSON-логи с `X-Request-ID`.  
-- Rate-limit 5rps/IP (кроме `/health`, `/metrics`).  
-- GDPR-лайт: экспорт/удаление по запросу (TODO).  
-- A11y: поддержка контраста, aria-метки.  
+## OpenAPI
 
----
+The OpenAPI specification is served at `/openapi.json`. Swagger UI is available at `/docs`. Example
+request:
 
-## 🗺️ Roadmap
+```bash
+curl -X POST http://localhost:8000/auth/token \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'username=tutor@example.com&password=SuperSecure123'
+```
 
-- [x] Stage 0 — база (auth, students, lessons, assignments).  
-- [x] Stage 1 — дашборд, ДЗ-квесты, отчёт родителям.  
-- [x] Stage 2 — биография, аватары, финансы, календарь.  
-- [ ] Stage 3 — реальный чат-бот ассистент.  
-- [ ] Stage 4 — интеграция реальных платежей (Stripe/YooKassa).  
+## Security notes
 
----
+- Always set a strong `HERMES_JWT_SECRET_KEY` in production.
+- TLS termination and OAuth2 client registration should be handled by the ingress/proxy layer.
+- Configure `HERMES_ALLOWED_HOSTS` (extra setting) when deploying to lock down Host headers.
 
-## 📸 Скриншоты (TODO)
+## License
 
-- Дашборд  
-- Календарь  
-- Финансы  
-- Биография ученика  
-
----
-
-## 🤝 Контрибьютинг
-
-- PR welcome.  
-- Линтер: `make lint`, формат: `make fmt`.  
-- Тесты: `make test`.  
-
----
-
-## 📜 Лицензия
-
-MIT (или иная, на выбор).
+MIT

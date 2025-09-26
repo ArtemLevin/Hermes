@@ -1,52 +1,38 @@
-# Makefile
-SHELL := /bin/bash
+PYTHON ?= python3.11
+VENV ?= .venv
+ACTIVATE = . $(VENV)/bin/activate
 
-.PHONY: up down logs api web migrate seed seed2 test lint fmt rebuild
+.PHONY: install lint typecheck test run migrate revision compose-up compose-down format
 
-# - Базовые -
-up:
-	docker-compose up -d --build
-
-down:
-	docker-compose down -v
-
-logs:
-	docker-compose logs -f --tail=200 api worker scheduler web db redis
-
-rebuild:
-	docker-compose build --no-cache api web
-
-# - Миграции -
-migrate:
-	docker-compose exec api alembic upgrade head
-
-migrate-down:
-	docker-compose exec api alembic downgrade -1
-
-# - Сиды -
-seed: ## базовые фикстуры этапа 0 (если уже есть — выполнится быстро)
-	docker-compose exec api python scripts/seed.py
-
-seed2: ## доп. фикстуры этапа 2 (темы, аватары, мемы, турнир, задания)
-	docker-compose exec api python scripts/seed_stage2.py
-
-# - Тесты -
-test:
-	# Smoke Stage 0/1
-	BASE=http://localhost:8000 pytest -q api/tests/test_smoke.py || true
-	# Stage 2
-	BASE=http://localhost:8000 pytest -q api/tests/test_stage2.py || true
-
-# - Формат/линт (опционально) -
-fmt:
-	docker-compose exec api python -m black .
+install:
+	$(PYTHON) -m venv $(VENV)
+	$(ACTIVATE); pip install --upgrade pip
+	$(ACTIVATE); pip install -e .[dev]
 
 lint:
-	docker-compose exec api python -m ruff check .
+	$(ACTIVATE); ruff check app tests
 
-# - Удобные команды -
-api:
-	docker-compose exec api bash
+format:
+	$(ACTIVATE); ruff check --fix app tests
 
-web:
-	docker-compose exec web bash
+typecheck:
+	$(ACTIVATE); mypy app tests
+
+test:
+	$(ACTIVATE); pytest
+
+run:
+	$(ACTIVATE); uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+migrate:
+	$(ACTIVATE); alembic upgrade head
+
+revision:
+	@if [ -z "$(msg)" ]; then echo "Usage: make revision msg=message"; exit 1; fi
+	$(ACTIVATE); alembic revision --autogenerate -m "$(msg)"
+
+compose-up:
+	docker-compose up --build
+
+compose-down:
+	docker-compose down -v
