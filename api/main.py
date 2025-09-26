@@ -1,17 +1,13 @@
+# api/main.py
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
-# Логи и correlation-id
-from logging_config import setup_json_logging, CorrelationIdMiddleware
-
-# Метрики
-from metrics import MetricsMiddleware, router as metrics_router
-
-# Rate limit (Redis token-bucket)
-from rate_limit import RateLimitMiddleware
-
-# Роутеры
-from routers import (
+from fastapi.responses import JSONResponse
+from api.logging_config import setup_json_logging, CorrelationIdMiddleware
+from api.metrics import MetricsMiddleware, router as metrics_router
+from api.rate_limit import RateLimitMiddleware
+from api.routers import (
     auth,
     students,
     dashboard,
@@ -25,51 +21,58 @@ from routers import (
     student_bio,
     payments,
 )
+from api.deps import engine
+from sqlalchemy.ext.asyncio import create_async_engine
 
-# ==== Инициализация приложения ====
+# Setup logging before app starts
 setup_json_logging()
+logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Hermes MVP", version="0.3")  # версия ↑ для Stage 2
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Application starting up")
+    # Initialize async engine if needed for async operations
+    yield
+    logger.info("Application shutting down")
 
-# CORS для фронтенда
+app = FastAPI(
+    title="Hermes MVP",
+    version="0.3.0",
+    lifespan=lifespan
+)
+
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=True,
 )
 
-# Middlewares: порядок — CORS -> RateLimit -> CorrelationId -> Metrics
-app.add_middleware(RateLimitMiddleware)         # 5 rps / ip, исключая /health,/metrics,/docs
-app.add_middleware(CorrelationIdMiddleware)     # X-Request-ID
-app.add_middleware(MetricsMiddleware)           # Prometheus
+# Middlewares: order matters
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(CorrelationIdMiddleware)
+app.add_middleware(MetricsMiddleware)
 
-# Технические эндпоинты
-@app.get("/health")
+# Routes
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
+app.include_router(students.router, prefix="/students", tags=["students"])
+app.include_router(student_bio.router, tags=["students"]) # /students/{id}/bio, /students/{id}/avatar
+app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
+app.include_router(assignments.router, prefix="/assignments", tags=["assignments"])
+app.include_router(lessons.router, prefix="/lessons", tags=["lessons"])
+app.include_router(topics.router, prefix="/topics", tags=["topics"])
+app.include_router(mems.router, prefix="/mems", tags=["mems"])
+app.include_router(tournaments.router, prefix="/tournaments", tags=["tournaments"])
+app.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
+app.include_router(payments.router, prefix="/payments", tags=["payments"])
+app.include_router(metrics_router, prefix="/metrics", tags=["metrics"])
+
+@app.get("/health", response_class=JSONResponse)
 def health():
     return {"status": "ok"}
 
-@app.get("/")
+@app.get("/", response_class=JSONResponse)
 def root():
-    return {"app": "Tutor MVP", "version": "0.3"}
-
-# Маршруты приложения
-app.include_router(auth.router, prefix="/auth", tags=["auth"])
-app.include_router(students.router, prefix="/students", tags=["students"])
-app.include_router(student_bio.router, tags=["students"])  # /students/{id}/bio, /students/{id}/avatar
-app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
-
-app.include_router(lessons.router, prefix="/lessons", tags=["lessons"])
-app.include_router(assignments.router, prefix="/assignments", tags=["assignments"])
-app.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
-app.include_router(topics.router, prefix="/topics", tags=["topics"])
-
-app.include_router(mems.router, prefix="/mems", tags=["mems"])
-app.include_router(tournaments.router, prefix="/tournaments", tags=["tournaments"])
-
-app.include_router(payments.router, prefix="/finance", tags=["finance"])
-app.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
-
-# /metrics для Prometheus
-app.include_router(metrics_router, tags=["metrics"])
+    return {"app": "Tutor MVP", "version": "0.3.0"}

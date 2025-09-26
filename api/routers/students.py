@@ -1,61 +1,57 @@
-from fastapi import APIRouter, Depends, Response, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import select
+# api/routers/students.py
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from deps import get_db, pagination, Page
-from models import Student
-from audit import audit_event
+from api.deps import get_db
+from api.models import Student, User
+from api.schemas import StudentCreate, StudentOut, StudentUpdate
+from api.security import get_current_user
 
 router = APIRouter()
 
-class StudentCreateIn(BaseModel):
-    name: str
-    tutor_id: int
-    level: int = 1
-
-@router.get("")
-def list_students(
-    response: Response,
-    q: str | None = None,
-    page: Page = Depends(pagination),
+@router.get("/", response_model=List[StudentOut])
+def get_students(
+    skip: int = 0,
+    limit: int = 100,
     db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
 ):
-    stmt = select(Student)
-    if q:
-        stmt = stmt.where(Student.name.ilike(f"%{q}%"))
-    all_students = db.execute(stmt).scalars().all()
-    response.headers["X-Total-Count"] = str(len(all_students))
-    start = (page.page - 1) * page.size
-    items = [
-        {"id": s.id, "name": s.name, "level": s.level}
-        for s in all_students[start : start + page.size]
-    ]
-    return items
+    # Only return students associated with the current tutor
+    students = db.query(Student).filter(Student.tutor_id == current_user.id).offset(skip).limit(limit).all()
+    return students
 
-@router.post("")
-def create_student(payload: StudentCreateIn, db: Session = Depends(get_db)):
-    # простой дубль-чек по имени в рамках одного тьютора
-    exists = db.scalar(
-        select(Student).where(
-            Student.tutor_id == payload.tutor_id,
-            Student.name == payload.name,
-        )
-    )
-    if exists:
-        raise HTTPException(status_code=400, detail="Student already exists")
+@router.get("/{student_id}", response_model=StudentOut)
+def get_student(student_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    student = db.query(Student).filter(Student.id == student_id, Student.tutor_id == current_user.id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found or not accessible")
+    return student
 
-    s = Student(name=payload.name, tutor_id=payload.tutor_id, level=payload.level)
-    db.add(s)
+@router.post("/", response_model=StudentOut)
+def create_student(student: StudentCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    # Ensure tutor_id matches the current user's ID
+    db_student = Student(**student.dict(), tutor_id=current_user.id)
+    db.add(db_student)
     db.commit()
-    db.refresh(s)
+    db.refresh(db_student)
+    return db_student
 
-    # аудит-событие
-    audit_event(
-        "create_student",
-        student_id=s.id,
-        tutor_id=s.tutor_id,
-        name=s.name,
-        level=s.level,
-    )
+@router.put("/{student_id}", response_model=StudentOut)
+def update_student(student_id: int, student: StudentUpdate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    db_student = db.query(Student).filter(Student.id == student_id, Student.tutor_id == current_user.id).first()
+    if not db_student:
+        raise HTTPException(status_code=404, detail="Student not found or not accessible")
+    for key, value in student.dict(exclude_unset=True).items():
+        setattr(db_student, key, value)
+    db.commit()
+    db.refresh(db_student)
+    return db_student
 
-    return {"id": s.id, "name": s.name, "level": s.level}
+@router.delete("/{student_id}")
+def delete_student(student_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    db_student = db.query(Student).filter(Student.id == student_id, Student.tutor_id == current_user.id).first()
+    if not db_student:
+        raise HTTPException(status_code=404, detail="Student not found or not accessible")
+    db.delete(db_student)
+    db.commit()
+    return {"message": "Student deleted successfully"}

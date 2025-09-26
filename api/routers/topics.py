@@ -1,60 +1,61 @@
+# api/routers/topics.py
+from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.orm import Session
-
-from deps import get_db
-from models import Topic, ErrorHotspot
+from api.deps import get_db
+from api.models import Topic, ErrorHotspot, Student
+from api.schemas import TopicOut, HeatmapUpdate, HeatmapOut
+from api.security import get_current_user
 
 router = APIRouter()
 
-# ===== Schemas =====
-class TopicIn(BaseModel):
-    name: str
+@router.get("/", response_model=List[TopicOut])
+def get_topics(db: Session = Depends(get_db)):
+    topics = db.query(Topic).all()
+    return topics
 
-class TopicOut(BaseModel):
-    id: int
-    name: str
+@router.post("/heatmap", response_model=HeatmapOut)
+def update_heatmap(
+    heatmap_data: HeatmapUpdate,
+    student_id: int = Query(..., ge=1),
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    # Validate student ownership
+    student = db.query(Student).filter(Student.id == student_id, Student.tutor_id == current_user.id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found or not accessible")
 
-class HeatIn(BaseModel):
-    topic_id: int
-    delta: int  # насколько увеличить "heat"
+    topic = db.query(Topic).filter(Topic.id == heatmap_data.topic_id).first()
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
 
-# ===== Endpoints =====
-@router.get("")
-def list_topics(db: Session = Depends(get_db)):
-    rows = db.execute(select(Topic).order_by(Topic.name)).scalars().all()
-    return [{"id": t.id, "name": t.name} for t in rows]
+    hotspot = db.query(ErrorHotspot).filter(
+        ErrorHotspot.student_id == student_id,
+        ErrorHotspot.topic_id == heatmap_data.topic_id
+    ).first()
 
-@router.post("")
-def create_topic(payload: TopicIn, db: Session = Depends(get_db)):
-    t = Topic(name=payload.name)
-    db.add(t)
-    db.commit()
-    db.refresh(t)
-    return {"id": t.id, "name": t.name}
-
-@router.get("/heatmap")
-def student_heatmap(student_id: int = Query(...), db: Session = Depends(get_db)):
-    rows = db.execute(
-        select(ErrorHotspot).where(ErrorHotspot.student_id == student_id)
-    ).scalars().all()
-    return [
-        {"topic_id": h.topic_id, "heat": h.heat, "updated_at": h.updated_at.isoformat()}
-        for h in rows
-    ]
-
-@router.post("/heatmap")
-def adjust_heat(student_id: int, payload: HeatIn, db: Session = Depends(get_db)):
-    h = db.scalar(
-        select(ErrorHotspot).where(
-            ErrorHotspot.student_id == student_id, ErrorHotspot.topic_id == payload.topic_id
+    if not hotspot:
+        hotspot = ErrorHotspot(
+            student_id=student_id,
+            topic_id=heatmap_data.topic_id,
+            heat=max(0, heatmap_data.delta) # Ensure non-negative initial heat
         )
-    )
-    if not h:
-        h = ErrorHotspot(student_id=student_id, topic_id=payload.topic_id, heat=0)
-        db.add(h)
-    h.heat = max(0, (h.heat or 0) + payload.delta)
+        db.add(hotspot)
+    else:
+        new_heat = hotspot.heat + heatmap_data.delta
+        hotspot.heat = max(0, new_heat) # Ensure heat doesn't go below 0
+
     db.commit()
-    db.refresh(h)
-    return {"topic_id": h.topic_id, "heat": h.heat}
+    db.refresh(hotspot)
+    return HeatmapOut(topic_id=hotspot.topic_id, heat=hotspot.heat)
+
+@router.get("/heatmap/{student_id}", response_model=List[HeatmapOut])
+def get_heatmap(student_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    # Validate student ownership
+    student = db.query(Student).filter(Student.id == student_id, Student.tutor_id == current_user.id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found or not accessible")
+
+    hotspots = db.query(ErrorHotspot).filter(ErrorHotspot.student_id == student_id).all()
+    return [HeatmapOut(topic_id=h.topic_id, heat=h.heat) for h in hotspots]

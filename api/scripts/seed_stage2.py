@@ -1,92 +1,82 @@
+# scripts/seed_stage2.py
+import os
+import sys
 from datetime import datetime, timedelta
-from sqlalchemy import select
-from deps import SessionLocal
-from models import (
-    Topic, AvatarTheme, Mem, Tournament, TournamentParticipant,
-    Student, Assignment
-)
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from api.models import Base, Topic, AvatarTheme, Trophy, Mem, Tournament, TournamentParticipant
 
-def upsert_topic(db, name: str):
-    t = db.scalar(select(Topic).where(Topic.name == name))
-    if not t:
-        t = Topic(name=name)
-        db.add(t)
-        db.flush()
-    return t
+# Adjust path to import from api package
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def upsert_avatar(db, code: str, icon: str):
-    a = db.scalar(select(AvatarTheme).where(AvatarTheme.code == code))
-    if not a:
-        a = AvatarTheme(code=code, icon=icon)
-        db.add(a)
-        db.flush()
-    return a
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./test.db")
 
-def run():
-    with SessionLocal() as db:
-        # --- Темы ---
-        topics = ["Алгебра", "Геометрия", "Интегралы", "Сочинение", "Физика: кинематика"]
-        tmap = {name: upsert_topic(db, name) for name in topics}
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-        # --- Аватары ---
-        avatars = [
-            ("warrior", "🛡️"),
-            ("mage", "🪄"),
-            ("explorer", "🧭"),
+def seed():
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+
+    try:
+        # Check if data already exists
+        if db.query(Topic).filter(Topic.name == "Algebra").first():
+            print("Stage 2 seed data already exists.")
+            return
+
+        # Create Topics
+        topics = [
+            Topic(name="Algebra"),
+            Topic(name="Geometry"),
+            Topic(name="Calculus"),
+            Topic(name="Statistics"),
         ]
-        amap = {code: upsert_avatar(db, code, icon) for code, icon in avatars}
-
-        # Привяжем аватары студентам по порядку, если не задано
-        students = db.execute(select(Student)).scalars().all()
-        for i, s in enumerate(students):
-            if not s.avatar_theme_id:
-                s.avatar_theme_id = list(amap.values())[i % len(amap)].id
-
-        # --- Мемы (общие) ---
-        mems = [
-            ("https://i.imgflip.com/30b1gx.jpg", "Кек, но делай ДЗ!"),
-            ("https://i.imgflip.com/1bij.jpg", "Держись, у тебя получится!"),
-        ]
-        for url, cap in mems:
-            if not db.scalar(select(Mem).where(Mem.url == url)):
-                db.add(Mem(url=url, caption=cap))
-
-        # --- Турнир ---
-        tour = db.scalar(select(Tournament).where(Tournament.name == "Осенний Кубок"))
-        if not tour:
-            tour = Tournament(
-                name="Осенний Кубок",
-                level=1,
-                start_at=datetime.utcnow(),
-                end_at=datetime.utcnow() + timedelta(days=14),
-            )
-            db.add(tour)
-            db.flush()
-            # добавим участников из первых двух студентов
-            for s in students[:2]:
-                db.add(TournamentParticipant(tournament_id=tour.id, student_id=s.id, points=0))
-
-        # --- Простейшие ДЗ по студентам (если пусто) ---
-        for s in students:
-            has_any = db.scalar(select(Assignment).where(Assignment.student_id == s.id))
-            if not has_any:
-                due = datetime.utcnow() + timedelta(days=3)
-                a1 = Assignment(
-                    student_id=s.id, status="new", title="Повторить алгебру",
-                    reward_type="coin", due_at=due
-                )
-                a1.topics = [tmap["Алгебра"]]
-                db.add(a1)
-
-                a2 = Assignment(
-                    student_id=s.id, status="new", title="Задачи по геометрии",
-                    reward_type="badge", due_at=due + timedelta(days=1)
-                )
-                a2.topics = [tmap["Геометрия"]]
-                db.add(a2)
-
+        db.add_all(topics)
         db.commit()
-    print("Stage2 seed done: topics, avatars, mems, tournament, sample assignments.")
+
+        # Create Avatar Themes
+        avatar_themes = [
+            AvatarTheme(code="warrior", label="Воин 🛡️"),
+            AvatarTheme(code="mage", label="Маг 🪄"),
+            AvatarTheme(code="explorer", label="Исследователь 🧭"),
+        ]
+        db.add_all(avatar_themes)
+        db.commit()
+
+        # Create Trophies
+        trophies = [
+            Trophy(name="First Steps", description="Completed first assignment"),
+            Trophy(name="Perfect Score", description="Got 5 on an assignment"),
+            Trophy(name="Week Streak", description="Completed assignments for 7 days straight"),
+        ]
+        db.add_all(trophies)
+        db.commit()
+
+        # Create Memes
+        mems = [
+            Mem(title="Math Meme 1", image_url="https://example.com/meme1.jpg"),
+            Mem(title="Math Meme 2", image_url="https://example.com/meme2.jpg"),
+        ]
+        db.add_all(mems)
+        db.commit()
+
+        # Create Tournament
+        tournament = Tournament(
+            name="Fall Math Challenge",
+            description="A friendly competition for all students.",
+            start_date=datetime.utcnow().date(),
+            end_date=(datetime.utcnow() + timedelta(days=30)).date()
+        )
+        db.add(tournament)
+        db.commit()
+
+        print("Stage 2 seed data created successfully.")
+
+    except Exception as e:
+        print(f"Error during seeding: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 if __name__ == "__main__":
-    run()
+    seed()

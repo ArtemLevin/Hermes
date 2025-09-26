@@ -1,21 +1,43 @@
-from passlib.context import CryptContext
+# api/security.py
 from datetime import datetime, timedelta
-import jwt, os
+from typing import Optional
+import os
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from api.schemas import TokenData
 
-pwd = CryptContext(schemes=["argon2"], deprecated="auto")
-SECRET = os.environ.get("SECRET_KEY", "devsecret")
-ALGO = "HS256"
+# --- Password hashing ---
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
 
 def hash_password(password: str) -> str:
-    return pwd.hash(password)
+    return pwd_context.hash(password)
 
-def verify_password(password: str, hashed: str) -> bool:
-    return pwd.verify(password, hashed)
+# --- JWT Token ---
+SECRET_KEY = os.getenv("SECRET_KEY", "your-default-secret-key-change-me")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 30))
 
-def make_token(sub: int, role: str, hours: int = 8) -> str:
-    payload = {
-        "sub": sub,
-        "role": role,
-        "exp": datetime.utcnow() + timedelta(hours=hours),
-    }
-    return jwt.encode(payload, SECRET, algorithm=ALGO)
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def verify_token(token: str) -> Optional[TokenData]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        role: str = payload.get("role")
+        if email is None or role is None:
+            return None
+        token_data = TokenData(email=email, role=role)
+    except JWTError:
+        return None
+    return token_data

@@ -1,31 +1,28 @@
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1.7
+FROM python:3.11-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential curl && \
-    rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
-ENV PYTHONPATH=/app/api
+# System deps (build & runtime)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential gcc \
+    && rm -rf /var/lib/apt/lists/*
 
-# зависимости из корня репозитория
-COPY pyproject.toml ./
+# Copy project and install via pyproject.toml so ALL deps get in (incl. prometheus-client, rq-scheduler, python-json-logger)
+COPY . /app
+
+# Upgrade pip and install the package
 RUN python -m pip install --upgrade pip && \
-    pip install "fastapi==0.115.0" "uvicorn[standard]==0.30.6" \
-                "sqlalchemy==2.0.34" "psycopg2-binary==2.9.9" \
-                "alembic==1.13.2" "passlib[argon2]==1.7.4" \
-                "pyjwt==2.9.0" "redis==5.0.8" "rq==1.16.2" \
-                "requests==2.32.3"
+    pip install .
 
-# кладём код API в /app/api
-COPY api/ ./api
-
-# работаем внутри папки api
-WORKDIR /app/api
+# Default runtime envs
+ENV PORT=8000
 
 EXPOSE 8000
-CMD ["bash","-lc","alembic upgrade head || true && uvicorn main:app --host 0.0.0.0 --port 8000"]
+
+# Run API
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

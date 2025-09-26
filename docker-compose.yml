@@ -1,4 +1,5 @@
 version: "3.9"
+
 services:
   db:
     image: postgres:15
@@ -6,74 +7,86 @@ services:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app
       POSTGRES_DB: tutor
-    ports: ["5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL","pg_isready -U app -d tutor"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+      test: ["CMD-SHELL", "pg_isready -U app -d tutor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
-    image: redis:7
-    ports: ["6379:6379"]
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
     healthcheck:
-      test: ["CMD","redis-cli","ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
-      timeout: 3s
-      retries: 10
+      timeout: 5s
+      retries: 5
 
   api:
-    build: ./api
-    environment:
-      DATABASE_URL: postgresql+psycopg2://app:app@db:5432/tutor
-      REDIS_URL: redis://redis:6379/0
-      SMTP_HOST: mailhog
-      SMTP_PORT: 1025
-      SECRET_KEY: devsecret
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
-      mailhog:
-        condition: service_started
-    ports: ["8000:8000"]
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql+psycopg2://app:app@db:5432/tutor
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=very_secret_key_change_me_please
+    command: ["bash", "-lc", "alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
     healthcheck:
-      test: ["CMD","curl","-f","http://localhost:8000/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   worker:
-    build: ./api
-    command: ["python","-m","rq","worker","default"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "rq", "worker", "default"]
     environment:
-      REDIS_URL: redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
-      redis:
-        condition: service_started
+      - redis
+      - api
 
-  # Новый сервис для планировщика периодических задач
   scheduler:
-    build: ./api
-    command: ["python","jobs.py"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "api/jobs.py"]
     environment:
-      REDIS_URL: redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
-      redis:
-        condition: service_started
+      - redis
+      - api
 
   web:
-    build: ./web
-    ports: ["5173:5173"]
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
     depends_on:
-      api:
-        condition: service_healthy
+      - api
+    environment:
+      - CHOKIDAR_USEPOLLING=true
 
   mailhog:
     image: mailhog/mailhog
-    ports: ["8025:8025","1025:1025"]
+    ports:
+      - "8025:8025"
+      - "1025:1025"
 
 volumes:
-  pgdata: {}
+  pgdata:

@@ -1,78 +1,60 @@
-from __future__ import annotations
-from datetime import datetime
-from typing import Optional
-
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
-from sqlalchemy import select
+# api/routers/lessons.py
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-
-from deps import get_db, pagination, Page
-from models import Lesson, Student
-from jobs import enqueue_lesson_reminder
-from audit import audit_event
+from api.deps import get_db
+from api.models import Lesson, Student
+from api.schemas import LessonCreate, LessonOut, LessonUpdate
+from api.security import get_current_user
 
 router = APIRouter()
 
-# ==== Schemas ====
-class LessonCreateIn(BaseModel):
-    student_id: int
-    date: datetime
-    topic: str
-
-class LessonOut(BaseModel):
-    id: int
-    student_id: int
-    date: datetime
-    topic: str
-
-# ==== Endpoints ====
-@router.get("")
-def list_lessons(
+@router.get("/", response_model=List[LessonOut])
+def get_lessons(
+    skip: int = 0,
+    limit: int = 100,
     db: Session = Depends(get_db),
-    page: Page = Depends(pagination),
-    student_id: Optional[int] = Query(None),
-    date_from: Optional[datetime] = Query(None),
-    date_to: Optional[datetime] = Query(None),
+    current_user = Depends(get_current_user)
 ):
-    stmt = select(Lesson)
-    if student_id:
-        stmt = stmt.where(Lesson.student_id == student_id)
-    if date_from:
-        stmt = stmt.where(Lesson.date >= date_from)
-    if date_to:
-        stmt = stmt.where(Lesson.date <= date_to)
-    rows = db.execute(stmt.order_by(Lesson.date.asc())).scalars().all()
+    # Only return lessons for students associated with the current tutor
+    lessons = db.query(Lesson).join(Student).filter(Student.tutor_id == current_user.id).offset(skip).limit(limit).all()
+    return lessons
 
-    total = len(rows)
-    start = (page.page - 1) * page.size
-    items = rows[start : start + page.size]
+@router.get("/{lesson_id}", response_model=LessonOut)
+def get_lesson(lesson_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    lesson = db.query(Lesson).join(Student).filter(Lesson.id == lesson_id, Student.tutor_id == current_user.id).first()
+    if not lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found or not accessible")
+    return lesson
 
-    return {
-        "total": total,
-        "items": [
-            {"id": l.id, "student_id": l.student_id, "date": l.date, "topic": l.topic}
-            for l in items
-        ],
-    }
-
-@router.post("", response_model=LessonOut)
-def create_lesson(payload: LessonCreateIn, db: Session = Depends(get_db)):
-    # validate student
-    if not db.get(Student, payload.student_id):
-        raise HTTPException(404, "Student not found")
-
-    l = Lesson(student_id=payload.student_id, date=payload.date, topic=payload.topic)
-    db.add(l)
+@router.post("/", response_model=LessonOut)
+def create_lesson(lesson: LessonCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    # Validate that the student belongs to the current user
+    student = db.query(Student).filter(Student.id == lesson.student_id, Student.tutor_id == current_user.id).first()
+    if not student:
+        raise HTTPException(status_code=400, detail="Student not found or not accessible")
+    db_lesson = Lesson(**lesson.dict())
+    db.add(db_lesson)
     db.commit()
-    db.refresh(l)
+    db.refresh(db_lesson)
+    return db_lesson
 
-    # шедулим напоминание «урок завтра» (email-заглушка)
-    enqueue_lesson_reminder(
-        student_email=f"student+{payload.student_id}@example.com",
-        lesson_id=l.id,
-        start_at=l.date,
-    )
+@router.put("/{lesson_id}", response_model=LessonOut)
+def update_lesson(lesson_id: int, lesson: LessonUpdate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    db_lesson = db.query(Lesson).join(Student).filter(Lesson.id == lesson_id, Student.tutor_id == current_user.id).first()
+    if not db_lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found or not accessible")
+    for key, value in lesson.dict(exclude_unset=True).items():
+        setattr(db_lesson, key, value)
+    db.commit()
+    db.refresh(db_lesson)
+    return db_lesson
 
-    audit_event("create_lesson", lesson_id=l.id, student_id=l.student_id, date=l.date.isoformat())
-    return LessonOut(id=l.id, student_id=l.student_id, date=l.date, topic=l.topic)
+@router.delete("/{lesson_id}")
+def delete_lesson(lesson_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    db_lesson = db.query(Lesson).join(Student).filter(Lesson.id == lesson_id, Student.tutor_id == current_user.id).first()
+    if not db_lesson:
+        raise HTTPException(status_code=404, detail="Lesson not found or not accessible")
+    db.delete(db_lesson)
+    db.commit()
+    return {"message": "Lesson deleted successfully"}

@@ -1,182 +1,104 @@
-from __future__ import annotations
+# api/routers/assignments.py
+from typing import List
 from datetime import datetime, timezone
-from typing import List, Optional
-
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-
-from deps import get_db, pagination, Page
-from models import Assignment, Submission, Topic, Student
-from audit import audit_event
+from api.deps import get_db
+from api.models import Assignment, Student, Submission
+from api.schemas import AssignmentCreate, AssignmentOut, AssignmentUpdate, SubmissionCreate, SubmissionOut
+from api.security import get_current_user
 
 router = APIRouter()
 
-# ====== Schemas ======
-class AssignmentCreateIn(BaseModel):
-    student_id: int
-    lesson_id: Optional[int] = None
-    title: Optional[str] = None
-    reward_type: Optional[str] = None  # "badge" | "coin" | "star"
-    due_at: Optional[datetime] = None
-    topic_ids: List[int] = []
-    checklist: List[str] = []  # пока не сохраняем отдельно (MVP)
-
-class AssignmentOut(BaseModel):
-    id: int
-    student_id: int
-    lesson_id: Optional[int]
-    status: str
-    title: Optional[str]
-    reward_type: Optional[str]
-    due_at: Optional[datetime]
-    topic_ids: List[int]
-
-class SubmissionIn(BaseModel):
-    artifacts: List[str] = []
-    grade: Optional[float] = None
-    feedback: Optional[str] = None
-
-# ====== Helpers ======
-def _reward_points(kind: Optional[str]) -> int:
-    if kind == "star":
-        return 20
-    if kind == "coin":
-        return 15
-    if kind == "badge":
+def _reward_points(reward_type: str) -> int:
+    """Calculate points based on reward type."""
+    if reward_type == "xp":
         return 10
-    return 8  # базовое
+    elif reward_type == "trophy":
+        return 50
+    elif reward_type == "mem":
+        return 20
+    else:
+        return 10 # default
 
-# ====== Endpoints ======
-@router.get("")
-def list_assignments(
+@router.get("/", response_model=List[AssignmentOut])
+def get_assignments(
+    skip: int = 0,
+    limit: int = 100,
     db: Session = Depends(get_db),
-    page: Page = Depends(pagination),
-    student_id: Optional[int] = Query(None),
-    status: Optional[str] = Query(None),
+    current_user = Depends(get_current_user)
 ):
-    stmt = select(Assignment)
-    if student_id:
-        stmt = stmt.where(Assignment.student_id == student_id)
-    if status:
-        stmt = stmt.where(Assignment.status == status)
-    rows = db.execute(stmt.order_by(Assignment.created_at.desc())).scalars().all()
+    # Only return assignments for students associated with the current tutor
+    assignments = db.query(Assignment).join(Student).filter(Student.tutor_id == current_user.id).offset(skip).limit(limit).all()
+    return assignments
 
-    # пагинация простым слайсом
-    total = len(rows)
-    start = (page.page - 1) * page.size
-    items = rows[start : start + page.size]
+@router.get("/{assignment_id}", response_model=AssignmentOut)
+def get_assignment(assignment_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    assignment = db.query(Assignment).join(Student).filter(Assignment.id == assignment_id, Student.tutor_id == current_user.id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found or not accessible")
+    return assignment
 
-    result = []
-    for a in items:
-        topic_ids = [t.id for t in a.topics] if a.topics else []
-        result.append(
-            {
-                "id": a.id,
-                "student_id": a.student_id,
-                "lesson_id": a.lesson_id,
-                "status": a.status,
-                "title": a.title,
-                "reward_type": a.reward_type,
-                "due_at": a.due_at,
-                "topic_ids": topic_ids,
-            }
-        )
-    return {"total": total, "items": result}
-
-@router.post("")
-def create_assignment(payload: AssignmentCreateIn, db: Session = Depends(get_db)):
-    # ensure student exists
-    student = db.get(Student, payload.student_id)
+@router.post("/", response_model=AssignmentOut)
+def create_assignment(assignment: AssignmentCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    # Validate that the student belongs to the current user
+    student = db.query(Student).filter(Student.id == assignment.student_id, Student.tutor_id == current_user.id).first()
     if not student:
-        raise HTTPException(404, "Student not found")
-
-    a = Assignment(
-        student_id=payload.student_id,
-        lesson_id=payload.lesson_id,
-        status="new",
-        title=payload.title,
-        reward_type=payload.reward_type,
-        due_at=payload.due_at,
-        created_at=datetime.utcnow(),
-    )
-    # bind topics
-    if payload.topic_ids:
-        topics = db.execute(select(Topic).where(Topic.id.in_(payload.topic_ids))).scalars().all()
-        a.topics = topics
-
-    db.add(a)
+        raise HTTPException(status_code=400, detail="Student not found or not accessible")
+    db_assignment = Assignment(**assignment.dict())
+    db.add(db_assignment)
     db.commit()
-    db.refresh(a)
+    db.refresh(db_assignment)
+    return db_assignment
 
-    audit_event(
-        "create_assignment",
-        assignment_id=a.id,
-        student_id=a.student_id,
-        reward_type=a.reward_type,
-        due_at=a.due_at.isoformat() if a.due_at else None,
-    )
-    return {"id": a.id}
+@router.put("/{assignment_id}", response_model=AssignmentOut)
+def update_assignment(assignment_id: int, assignment: AssignmentUpdate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    db_assignment = db.query(Assignment).join(Student).filter(Assignment.id == assignment_id, Student.tutor_id == current_user.id).first()
+    if not db_assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found or not accessible")
+    for key, value in assignment.dict(exclude_unset=True).items():
+        setattr(db_assignment, key, value)
+    db_assignment.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(db_assignment)
+    return db_assignment
 
 @router.post("/{assignment_id}/start")
-def start_assignment(assignment_id: int, db: Session = Depends(get_db)):
-    a = db.get(Assignment, assignment_id)
-    if not a:
-        raise HTTPException(404, "Assignment not found")
-    if a.status not in ("new", "late"):
-        raise HTTPException(400, "Assignment not in startable state")
-    a.status = "in_progress"
+def start_assignment(assignment_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    assignment = db.query(Assignment).join(Student).filter(Assignment.id == assignment_id, Student.tutor_id == current_user.id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found or not accessible")
+    if assignment.status == "done":
+        raise HTTPException(status_code=400, detail="Assignment is already completed")
+    assignment.status = "in_progress"
     db.commit()
-    audit_event("start_assignment", assignment_id=a.id, student_id=a.student_id)
-    return {"status": a.status}
+    return {"status": assignment.status}
 
 @router.post("/{assignment_id}/submit")
-def submit_assignment(assignment_id: int, payload: SubmissionIn, db: Session = Depends(get_db)):
-    a = db.get(Assignment, assignment_id)
-    if not a:
-        raise HTTPException(404, "Assignment not found")
+def submit_assignment(assignment_id: int, submission: SubmissionCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    assignment = db.query(Assignment).join(Student).filter(Assignment.id == assignment_id, Student.tutor_id == current_user.id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found or not accessible")
+    if assignment.status == "done":
+        raise HTTPException(status_code=400, detail="Assignment is already submitted")
 
-    # создаём сабмит
-    sub = Submission(
-        assignment_id=a.id,
-        completed_at=datetime.utcnow().replace(tzinfo=None),
-        grade=payload.grade,
-        feedback=payload.feedback,
-    )
-    db.add(sub)
+    # Create submission
+    db_submission = Submission(assignment_id=assignment.id, **submission.dict())
+    db.add(db_submission)
 
-    # завершение задания
-    a.status = "done"
+    # Update assignment status
+    assignment.status = "done"
     db.commit()
 
-    # начисление очков за выполненное ДЗ
-    student = db.get(Student, a.student_id)
-    gained = _reward_points(a.reward_type)
+    # Update student progress
+    student = assignment.student
+    gained = _reward_points(assignment.reward_type)
     student.progress_points = (student.progress_points or 0) + gained
-    # авто-повышение уровня: 100 очков = +1 уровень
+
+    # Level up logic
     while student.progress_points >= 100:
         student.level += 1
         student.progress_points -= 100
 
     db.commit()
-
-    audit_event(
-        "submit_assignment",
-        assignment_id=a.id,
-        student_id=a.student_id,
-        gained_points=gained,
-        new_level=student.level,
-        points_left=student.progress_points,
-    )
-    return {"status": a.status, "gained_points": gained, "level": student.level}
-
-@router.post("/{assignment_id}/mark_late")
-def mark_late(assignment_id: int, db: Session = Depends(get_db)):
-    a = db.get(Assignment, assignment_id)
-    if not a:
-        raise HTTPException(404, "Assignment not found")
-    a.status = "late"
-    db.commit()
-    audit_event("mark_assignment_late", assignment_id=a.id, student_id=a.student_id)
-    return {"status": a.status}
+    return {"status": assignment.status, "gained_points": gained, "level": student.level}

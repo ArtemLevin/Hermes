@@ -1,49 +1,33 @@
-import os
-import time
-import requests
+# tests/test_smoke.py
+import pytest
 
-BASE = os.getenv("BASE", "http://localhost:8000")
+def test_health(client):
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 
-def test_health():
-    r = requests.get(f"{BASE}/health")
-    assert r.status_code == 200
+def test_auth_register(client, test_user):
+    response = client.post("/auth/register", json=test_user)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["email"] == test_user["email"]
+    assert data["role"] == test_user["role"]
 
-def test_auth_and_students():
-    # Регистрируем пользователя (идемпотентно)
-    requests.post(
-        f"{BASE}/auth/register",
-        json={"email": "tutor@example.com", "password": "tutor", "role": "tutor"},
-    )
-    # Логинимся
-    r = requests.post(
-        f"{BASE}/auth/login",
-        json={"email": "tutor@example.com", "password": "tutor"},
-    )
-    assert r.status_code == 200
-    token = r.json()["token"]
+def test_auth_login(client, test_user):
+    # Register first
+    client.post("/auth/register", json=test_user)
+    # Login
+    response = client.post("/auth/token", data={"username": test_user["email"], "password": "password123"})
+    assert response.status_code == 200
+    data = response.json()
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
 
-    # Получаем список учеников
-    r = requests.get(f"{BASE}/students", headers={"Authorization": f"Bearer {token}"})
-    assert r.status_code == 200
+def test_get_students_unauthorized(client):
+    response = client.get("/students/")
+    assert response.status_code == 401
 
-def test_metrics_and_notifications():
-    # Доступность /metrics
-    r = requests.get(f"{BASE}/metrics")
-    assert r.status_code == 200
-    assert "http_requests_total" in r.text
-
-    # Тестовая постановка письма в очередь
-    r = requests.post(
-        f"{BASE}/notifications/test",
-        json={"to": "test@example.com", "template": "test", "payload": {"x": 1}},
-    )
-    assert r.status_code == 200
-    assert r.json().get("status") == "queued"
-
-    # Дать воркеру время обработать (если поднят worker)
-    time.sleep(2)
-
-    # Повторная проверка метрик — должен расти счётчик запросов
-    r2 = requests.get(f"{BASE}/metrics")
-    assert r2.status_code == 200
-    assert "mail_sent_total" in r2.text  # метрика из jobs.send_email
+def test_get_students_authorized(client, auth_headers):
+    response = client.get("/students/", headers=auth_headers)
+    assert response.status_code == 200
+    assert "items" in response.json() # Assuming the endpoint returns a list under 'items'

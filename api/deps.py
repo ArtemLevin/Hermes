@@ -1,85 +1,77 @@
+# api/deps.py
 """Infrastructure dependencies shared across the application."""
-
-from __future__ import annotations
-
 import os
-from pathlib import Path
-from typing import Iterable
-
-from fastapi import Query
-from sqlalchemy import create_engine
+from contextlib import contextmanager
+from typing import Generator, AsyncGenerator
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import StaticPool
+from api.models import Base
 
-
-DEFAULT_SQLITE_URL = "sqlite:///./storage/hermes.db"
-
+DEFAULT_SQLITE_URL = "sqlite:///./test.db"
 
 def _ensure_sqlite_path(database_url: str) -> None:
-    """Create a directory for SQLite DBs before engine initialisation."""
-
-    if not database_url.startswith("sqlite"):
-        return
-
-    db_path = database_url.split("///", maxsplit=1)[-1]
-    if not db_path:
-        return
-
-    # ``sqlite:///:memory:`` не требует подготовки, а обычные файлы — да.
-    if db_path == ":memory:":
-        return
-
-    Path(db_path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
-
+    """Ensure parent directory exists for SQLite file."""
+    if database_url.startswith("sqlite:///"):
+        import pathlib
+        db_path = database_url[10:]  # Remove 'sqlite:///'
+        if db_path != ":memory:":
+            pathlib.Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
 def _create_engine() -> Engine:
     database_url = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
     _ensure_sqlite_path(database_url)
 
-    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+    connect_args = {}
+    if database_url.startswith("sqlite"):
+        connect_args["check_same_thread"] = False
 
+    engine = create_engine(
+        database_url,
+        echo=False,  # Set to True for debugging
+        pool_pre_ping=True,
+        connect_args=connect_args,
+    )
+
+    # Create tables on startup - this is a simple approach, prefer migrations in production
+    Base.metadata.create_all(bind=engine)
+    return engine
+
+def _create_async_engine():
+    database_url = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
+    _ensure_sqlite_path(database_url)
+    connect_args = {}
+    if database_url.startswith("sqlite"):
+        connect_args["check_same_thread"] = False
+
+    return create_async_engine(
+        database_url,
+        echo=False,
+        pool_pre_ping=True,
+        connect_args=connect_args,
+        # For SQLite in tests, use StaticPool
+        poolclass=StaticPool if database_url.startswith("sqlite") else None,
+    )
+
+# Sync engine and session
+sync_engine = _create_engine()
+SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
+
+# Async engine and session
+async_engine = _create_async_engine()
+AsyncSessionLocal = sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
+
+def get_db() -> Generator[Session, None, None]:
+    """Dependency for sync database session."""
+    db = SyncSessionLocal()
     try:
-        return create_engine(
-            database_url,
-            future=True,
-            pool_pre_ping=True,
-            connect_args=connect_args,
-        )
-    except SQLAlchemyError as exc:  # pragma: no cover - защитное поведение
-        # Исключение перехватывается, чтобы сообщить более осмысленную ошибку при старте.
-        msg = f"Unable to initialise database engine for URL {database_url!r}: {exc}"
-        raise RuntimeError(msg) from exc
+        yield db
+    finally:
+        db.close()
 
-
-if not (__package__ or "").startswith("api."):
-    import models as models_module  # type: ignore
-else:  # pragma: no cover - ветка для запуска как пакет
-    from . import models as models_module
-
-
-engine = _create_engine()
-SessionLocal = sessionmaker(engine, expire_on_commit=False, future=True)
-models_module.Base.metadata.create_all(bind=engine)
-
-
-def get_db() -> Iterable[Session]:
-    """FastAPI dependency returning a scoped SQLAlchemy session."""
-
-    with SessionLocal() as session:
+async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
+    """Dependency for async database session."""
+    async with AsyncSessionLocal() as session:
         yield session
-
-class Page:
-    """Simple pagination descriptor with sane defaults and bounds."""
-
-    def __init__(self, page: int = 1, size: int = 20, max_size: int = 100):
-        self.page = max(page, 1)
-        self.size = min(max(size, 1), max_size)
-
-def pagination(
-    page: int = Query(1, ge=1, description="Номер страницы (>= 1)"),
-    size: int = Query(20, ge=1, le=100, description="Размер страницы (1..100)"),
-) -> Page:
-    """Factory dependency that clamps incoming pagination parameters."""
-
-    return Page(page, size)
