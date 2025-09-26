@@ -1,21 +1,17 @@
-"""Endpoints for working with students."""
-
-import sys
-from pathlib import Path
-
-from fastapi import APIRouter, Depends, Response
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, Response, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-
-if not (__package__ or "").startswith("api."):
-    sys.path.append(str(Path(__file__).resolve().parents[1]))
-    from deps import Page, get_db, pagination
-    from models import Student
-else:  # pragma: no cover - ветка для запуска как пакет
-    from ..deps import Page, get_db, pagination
-    from ..models import Student
+from deps import get_db, pagination, Page
+from models import Student
+from audit import audit_event
 
 router = APIRouter()
+
+class StudentCreateIn(BaseModel):
+    name: str
+    tutor_id: int
+    level: int = 1
 
 @router.get("")
 def list_students(
@@ -24,23 +20,42 @@ def list_students(
     page: Page = Depends(pagination),
     db: Session = Depends(get_db),
 ):
-    filters = []
+    stmt = select(Student)
     if q:
-        filters.append(Student.name.ilike(f"%{q.strip()}%"))
-
-    total_stmt = select(func.count()).select_from(Student)
-    if filters:
-        total_stmt = total_stmt.where(*filters)
-    total = db.scalar(total_stmt) or 0
-    response.headers["X-Total-Count"] = str(total)
-
+        stmt = stmt.where(Student.name.ilike(f"%{q}%"))
+    all_students = db.execute(stmt).scalars().all()
+    response.headers["X-Total-Count"] = str(len(all_students))
     start = (page.page - 1) * page.size
-    items_stmt = (
-        select(Student)
-        .where(*filters)
-        .order_by(Student.id)
-        .offset(start)
-        .limit(page.size)
+    items = [
+        {"id": s.id, "name": s.name, "level": s.level}
+        for s in all_students[start : start + page.size]
+    ]
+    return items
+
+@router.post("")
+def create_student(payload: StudentCreateIn, db: Session = Depends(get_db)):
+    # простой дубль-чек по имени в рамках одного тьютора
+    exists = db.scalar(
+        select(Student).where(
+            Student.tutor_id == payload.tutor_id,
+            Student.name == payload.name,
+        )
     )
-    students = db.execute(items_stmt).scalars().all()
-    return [{"id": s.id, "name": s.name, "level": s.level} for s in students]
+    if exists:
+        raise HTTPException(status_code=400, detail="Student already exists")
+
+    s = Student(name=payload.name, tutor_id=payload.tutor_id, level=payload.level)
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+
+    # аудит-событие
+    audit_event(
+        "create_student",
+        student_id=s.id,
+        tutor_id=s.tutor_id,
+        name=s.name,
+        level=s.level,
+    )
+
+    return {"id": s.id, "name": s.name, "level": s.level}
