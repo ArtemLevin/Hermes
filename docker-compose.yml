@@ -1,16 +1,20 @@
-version: "3.9"
+# docker-compose.yml
+# Убираем версию, она устарела
+# version: '3.8'
 
 services:
   db:
-    image: postgres:15
+    image: postgres:15-alpine
+    restart: always
     environment:
+      POSTGRES_DB: tutor
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app
-      POSTGRES_DB: tutor
+    volumes:
+      # Используем именованный volume, правильно указав его в секции volumes внизу
+      - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app -d tutor"]
       interval: 10s
@@ -19,6 +23,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: always
     ports:
       - "6379:6379"
     healthcheck:
@@ -30,32 +35,40 @@ services:
   api:
     build:
       context: .
+      # Указываем корневой Dockerfile
       dockerfile: Dockerfile
+    restart: always
     ports:
       - "8000:8000"
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     environment:
       - DATABASE_URL=postgresql+psycopg2://app:app@db:5432/tutor
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=very_secret_key_change_me_please
-    command: ["bash", "-lc", "alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
+      # Убедимся, что PORT доступен внутри bash команды
+      - PORT=8000
+    # Выполняем миграции командой alembic (ожидается, что она теперь в PATH)
+    command: ["bash", "-c", "cd /app/api && alembic upgrade head && cd /app && exec uvicorn api.main:app --host 0.0.0.0 --port $$PORT"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   worker:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["python", "-m", "rq", "worker", "default"]
+    restart: always
     environment:
+      - DATABASE_URL=postgresql+psycopg2://app:app@db:5432/tutor
       - REDIS_URL=redis://redis:6379/0
+    # Используем исполняемый файл rq напрямую
+    command: ["rq", "worker", "default"]
     depends_on:
       - redis
       - api
@@ -64,9 +77,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["python", "api/jobs.py"]
+    restart: always
     environment:
+      - DATABASE_URL=postgresql+psycopg2://app:app@db:5432/tutor
       - REDIS_URL=redis://redis:6379/0
+    # Запускаем скрипт напрямую
+    command: ["python", "api/jobs.py"]
     depends_on:
       - redis
       - api
@@ -75,6 +91,7 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+    restart: always
     ports:
       - "5173:5173"
     depends_on:
@@ -84,9 +101,12 @@ services:
 
   mailhog:
     image: mailhog/mailhog
+    restart: always
     ports:
-      - "8025:8025"
-      - "1025:1025"
+      - "8025:8025" # Web UI
+      - "1025:1025" # SMTP server
 
 volumes:
+  # Правильное определение именованного тома
   pgdata:
+    # driver: local # можно указать, если нужно

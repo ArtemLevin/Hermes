@@ -4,6 +4,14 @@ import sys
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
+
+# --- Добавьте эти строки ---
+# Добавляем директорию проекта (/app) в sys.path
+project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_dir not in sys.path:
+    sys.path.insert(0, project_dir)
+# --------------------------
+
 from api.models import Base # Import your models
 
 # this is the Alembic Config object, which provides
@@ -15,7 +23,8 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here for 'autogenerate' support
+# add your model's MetaData object here
+# for 'autogenerate' support
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
